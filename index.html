@@ -115,83 +115,118 @@
     <div class="list" id="list"></div>
   </div>
 
-  <script>
-    const STORAGE_KEY = 'simple_text_notes_v1';
+  <!-- 使用 Firebase Firestore 存储，全网共享最近 10 条记录 -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      getDocs,
+      deleteDoc,
+      doc,
+      query,
+      orderBy,
+      limit,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    // TODO: 这里换成你自己的配置（下一条消息我会告诉你从哪复制）
+    const firebaseConfig = {
+      apiKey: "AIzaSyA6HizDnzne0Gcr1oA99Tw266n2HeYZRwk",
+      authDomain: "text-notes-5df68.firebaseapp.com",
+      projectId: "text-notes-5df68"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const notesCol = collection(db, "notes");
+
     const MAX_ITEMS = 10;
-    const inputEl = document.getElementById('input');
-    const saveBtn = document.getElementById('saveBtn');
-    const clearAllBtn = document.getElementById('clearAllBtn');
-    const listEl = document.getElementById('list');
-    const countEl = document.getElementById('count');
+    const inputEl = document.getElementById("input");
+    const saveBtn = document.getElementById("saveBtn");
+    const clearAllBtn = document.getElementById("clearAllBtn");
+    const listEl = document.getElementById("list");
+    const countEl = document.getElementById("count");
 
-    function loadNotes() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        return raw ? JSON.parse(raw) : [];
-      } catch {
-        return [];
-      }
+    async function fetchNotes() {
+      // 按时间倒序取最近 10 条
+      const q = query(notesCol, orderBy("time", "desc"), limit(MAX_ITEMS));
+      const snap = await getDocs(q);
+      const notes = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          text: data.text || "",
+          time: data.time?.toDate?.() || new Date(0)
+        };
+      });
+      return notes;
     }
 
-    function saveNotes(notes) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+    async function trimOldNotes() {
+      // 超过 10 条时，删除最旧的多余记录
+      const q = query(notesCol, orderBy("time", "desc"));
+      const snap = await getDocs(q);
+      if (snap.size <= MAX_ITEMS) return;
+      const extra = snap.docs.slice(MAX_ITEMS);
+      await Promise.all(extra.map((d) => deleteDoc(doc(notesCol, d.id))));
     }
 
-    function render() {
-      const notes = loadNotes();
+    function render(notes) {
       countEl.textContent = notes.length;
-      listEl.innerHTML = '';
+      listEl.innerHTML = "";
 
       if (!notes.length) {
-        listEl.innerHTML = '<div style="color:#999;font-size:13px;">还没有保存任何信息。</div>';
+        listEl.innerHTML =
+          '<div style="color:#999;font-size:13px;">还没有保存任何信息。</div>';
         return;
       }
 
       notes.forEach((note, idx) => {
-        const div = document.createElement('div');
-        div.className = 'item';
+        const div = document.createElement("div");
+        div.className = "item";
 
-        const textDiv = document.createElement('div');
-        textDiv.className = 'item-text';
+        const textDiv = document.createElement("div");
+        textDiv.className = "item-text";
         textDiv.textContent = note.text;
 
-        const footer = document.createElement('div');
-        footer.className = 'item-footer';
+        const footer = document.createElement("div");
+        footer.className = "item-footer";
 
-        const meta = document.createElement('div');
-        meta.textContent = new Date(note.time).toLocaleString();
+        const meta = document.createElement("div");
+        meta.textContent = note.time.toLocaleString();
 
-        const tag = document.createElement('span');
-        tag.className = 'tag';
+        const tag = document.createElement("span");
+        tag.className = "tag";
         tag.textContent = `第 ${notes.length - idx} 条（最新在上）`;
 
-        meta.appendChild(document.createTextNode(' '));
+        meta.appendChild(document.createTextNode(" "));
         meta.appendChild(tag);
 
-        const btns = document.createElement('div');
-        btns.className = 'item-buttons';
+        const btns = document.createElement("div");
+        btns.className = "item-buttons";
 
-        const copyBtn = document.createElement('button');
-        copyBtn.textContent = '复制';
-        copyBtn.className = 'secondary';
+        const copyBtn = document.createElement("button");
+        copyBtn.textContent = "复制";
+        copyBtn.className = "secondary";
         copyBtn.onclick = async () => {
           try {
             await navigator.clipboard.writeText(note.text);
-            copyBtn.textContent = '已复制';
-            setTimeout(() => (copyBtn.textContent = '复制'), 1200);
+            copyBtn.textContent = "已复制";
+            setTimeout(() => (copyBtn.textContent = "复制"), 1200);
           } catch {
-            alert('复制失败，可以手动选中后复制。');
+            alert("复制失败，可以手动选中后复制。");
           }
         };
 
-        const delBtn = document.createElement('button');
-        delBtn.textContent = '删除';
-        delBtn.className = 'secondary';
-        delBtn.onclick = () => {
-          const curr = loadNotes();
-          curr.splice(idx, 1);
-          saveNotes(curr);
-          render();
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "删除";
+        delBtn.className = "secondary";
+        delBtn.onclick = async () => {
+          if (!confirm("确定删除这条记录吗？")) return;
+          await deleteDoc(doc(notesCol, note.id));
+          await refresh();
         };
 
         btns.appendChild(copyBtn);
@@ -206,31 +241,50 @@
       });
     }
 
-    saveBtn.onclick = () => {
+    async function refresh() {
+      try {
+        const notes = await fetchNotes();
+        render(notes);
+      } catch (e) {
+        console.error(e);
+        alert("从服务器获取数据失败，请稍后再试。");
+      }
+    }
+
+    saveBtn.onclick = async () => {
       const text = inputEl.value.trim();
       if (!text) {
-        alert('请先输入或粘贴一段文字。');
+        alert("请先输入或粘贴一段文字。");
         return;
       }
-      let notes = loadNotes();
-      // 最新的放最前面
-      notes.unshift({ text, time: Date.now() });
-      if (notes.length > MAX_ITEMS) {
-        notes = notes.slice(0, MAX_ITEMS);
-      }
-      saveNotes(notes);
-      inputEl.value = '';
-      render();
-    };
-
-    clearAllBtn.onclick = () => {
-      if (confirm('确定要清空所有历史信息吗？')) {
-        localStorage.removeItem(STORAGE_KEY);
-        render();
+      try {
+        await addDoc(notesCol, {
+          text,
+          time: serverTimestamp()
+        });
+        inputEl.value = "";
+        await trimOldNotes();
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("保存到服务器失败，请稍后再试。");
       }
     };
 
-    render();
+    clearAllBtn.onclick = async () => {
+      if (!confirm("确定要清空所有历史信息吗？（所有人都看不到了）")) return;
+      try {
+        const snap = await getDocs(notesCol);
+        await Promise.all(snap.docs.map((d) => deleteDoc(doc(notesCol, d.id))));
+        await refresh();
+      } catch (e) {
+        console.error(e);
+        alert("清空失败，请稍后再试。");
+      }
+    };
+
+    // 页面加载时先拉一次数据
+    refresh();
   </script>
 </body>
 </html>
